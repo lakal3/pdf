@@ -44,7 +44,7 @@
 // the package. Equally important, traversal of other PDF data structures can be implemented
 // in other packages as needed.
 //
-package pdf // import "rsc.io/pdf"
+package pdf
 
 // BUG(rsc): The package is incomplete, although it has been used successfully on some
 // large real-world PDF files.
@@ -802,42 +802,50 @@ func (v Value) Reader() io.ReadCloser {
 	}
 	filter := v.Key("Filter")
 	param := v.Key("DecodeParms")
+	var err error
 	switch filter.Kind() {
 	default:
-		panic(fmt.Errorf("unsupported filter %v", filter))
+		return &errorReadCloser{err: fmt.Errorf("unsupported filter %v", filter)}
 	case Null:
 		// ok
 	case Name:
-		rd = applyFilter(rd, filter.Name(), param)
+		rd, err = applyFilter(rd, filter.Name(), param)
+		if err != nil {
+			return &errorReadCloser{err: err}
+		}
 	case Array:
 		for i := 0; i < filter.Len(); i++ {
-			rd = applyFilter(rd, filter.Index(i).Name(), param.Index(i))
+			rd, err = applyFilter(rd, filter.Index(i).Name(), param.Index(i))
+			if err != nil {
+				return &errorReadCloser{err: err}
+			}
 		}
 	}
 
 	return ioutil.NopCloser(rd)
 }
 
-func applyFilter(rd io.Reader, name string, param Value) io.Reader {
+func applyFilter(rd io.Reader, name string, param Value) (io.Reader, error) {
 	switch name {
 	default:
-		panic("unknown filter " + name)
+		return nil, fmt.Errorf("unknown filter %s", name)
 	case "FlateDecode":
 		zr, err := zlib.NewReader(rd)
 		if err != nil {
-			panic(err)
+			return nil, err
 		}
 		pred := param.Key("Predictor")
 		if pred.Kind() == Null {
-			return zr
+			return zr, nil
 		}
-		columns := param.Key("Columns").Int64()
 		switch pred.Int64() {
 		default:
-			fmt.Println("unknown predictor", pred)
-			panic("pred")
+			return nil, fmt.Errorf("unknown predictor %s", pred)
+		case 1:
+			return zr, nil
 		case 12:
-			return &pngUpReader{r: zr, hist: make([]byte, 1+columns), tmp: make([]byte, 1+columns)}
+			columns := param.Key("Columns").Int64()
+			return &pngUpReader{r: zr, hist: make([]byte, 1+columns), tmp: make([]byte, 1+columns)}, nil
 		}
 	}
 }
